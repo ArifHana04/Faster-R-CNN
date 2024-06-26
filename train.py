@@ -264,9 +264,9 @@ def main(args):
         square_training=args['square_training']
     )
     
-    kfold = StratifiedKFold(n_splits=args['kfold'], shuffle=True, random_state=args['seed'])
+    kfold = KFold(n_splits=args['kfold'], shuffle=True, random_state=args['seed'])
 
-    for fold, (train_idx, val_idx) in enumerate(kfold.split(dataset, dataset.targets)):
+    for fold, (train_idx, val_idx) in enumerate(kfold.split(dataset)):
         print(f"Fold {fold + 1}")
     
         train_subset = Subset(dataset, train_idx)
