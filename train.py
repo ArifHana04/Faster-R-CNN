@@ -287,7 +287,7 @@ def main(args):
     
         # Visualize some batches to check if data is loaded correctly
         for images, targets in train_loader:
-            show_transformed_image(images, targets, CLASSES, COLORS)
+            show_tranformed_image(images, targets, CLASSES, COLORS)
             break
         
         print(f"Number of training samples: {len(train_subset)}")
