@@ -284,13 +284,13 @@ def main(args):
             valid_sampler = SequentialSampler(val_subset)
     
         train_loader = create_train_loader(
-            train_dataset, BATCH_SIZE, NUM_WORKERS, batch_sampler=train_sampler
+            train_subset, BATCH_SIZE, NUM_WORKERS, batch_sampler=train_sampler
         )
         valid_loader = create_valid_loader(
-            valid_dataset, BATCH_SIZE, NUM_WORKERS, batch_sampler=valid_sampler
+            val_subset, BATCH_SIZE, NUM_WORKERS, batch_sampler=valid_sampler
         )
-        print(f"Number of training samples: {len(train_dataset)}")
-        print(f"Number of validation samples: {len(valid_dataset)}\n")
+        print(f"Number of training samples: {len(train_subset)}")
+        print(f"Number of validation samples: {len(val_subset)}\n")
     
         if VISUALIZE_TRANSFORMED_IMAGES:
             show_tranformed_image(train_loader, DEVICE, CLASSES, COLORS)
