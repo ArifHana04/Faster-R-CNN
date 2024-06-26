@@ -284,11 +284,7 @@ def main(args):
         
         train_loader = create_train_loader(train_subset, BATCH_SIZE, NUM_WORKERS, batch_sampler=train_sampler)
         valid_loader = create_valid_loader(val_subset, BATCH_SIZE, NUM_WORKERS, batch_sampler=valid_sampler)
-    
-        # Visualize some batches to check if data is loaded correctly
-        for images, targets in train_loader:
-            show_tranformed_image(images, targets, CLASSES, COLORS)
-            break
+
         
         print(f"Number of training samples: {len(train_subset)}")
         print(f"Number of validation samples: {len(val_subset)}\n")
