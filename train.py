@@ -265,32 +265,36 @@ def main(args):
     
     kfold = KFold(n_splits=args['kfold'], shuffle=True, random_state=args['seed'])
 
-    for fold, (train_idx, val_idx) in enumerate(kfold.split(dataset)):
+        for fold, (train_idx, val_idx) in enumerate(kfold.split(dataset)):
         print(f"Fold {fold + 1}")
-
+    
         train_subset = Subset(dataset, train_idx)
         val_subset = Subset(dataset, val_idx)
-
+    
+        print(f"Train indices: {train_idx[:5]}...{train_idx[-5:]}")
+        print(f"Validation indices: {val_idx[:5]}...{val_idx[-5:]}")
+        
         print('Creating data loaders')
         if args['distributed']:
-            train_sampler = distributed.DistributedSampler(
-                train_subset
-            )
-            valid_sampler = distributed.DistributedSampler(
-                val_subset, shuffle=False
-            )
+            train_sampler = distributed.DistributedSampler(train_subset)
+            valid_sampler = distributed.DistributedSampler(val_subset, shuffle=False)
         else:
             train_sampler = RandomSampler(train_subset)
             valid_sampler = SequentialSampler(val_subset)
+        
+        train_loader = create_train_loader(train_subset, BATCH_SIZE, NUM_WORKERS, batch_sampler=train_sampler)
+        valid_loader = create_valid_loader(val_subset, BATCH_SIZE, NUM_WORKERS, batch_sampler=valid_sampler)
     
-        train_loader = create_train_loader(
-            train_subset, BATCH_SIZE, NUM_WORKERS, batch_sampler=train_sampler
-        )
-        valid_loader = create_valid_loader(
-            val_subset, BATCH_SIZE, NUM_WORKERS, batch_sampler=valid_sampler
-        )
+        # Visualize some batches to check if data is loaded correctly
+        for images, targets in train_loader:
+            show_transformed_image(images, targets, CLASSES, COLORS)
+            break
+        
         print(f"Number of training samples: {len(train_subset)}")
         print(f"Number of validation samples: {len(val_subset)}\n")
+        
+        # Rest of the training code
+
     
         if VISUALIZE_TRANSFORMED_IMAGES:
             show_tranformed_image(train_loader, DEVICE, CLASSES, COLORS)
