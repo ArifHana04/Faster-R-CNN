@@ -280,8 +280,8 @@ def main(args):
                 val_subset, shuffle=False
             )
         else:
-            train_sampler = RandomSampler(train_dataset)
-            valid_sampler = SequentialSampler(valid_dataset)
+            train_sampler = RandomSampler(train_subset)
+            valid_sampler = SequentialSampler(val_subset)
     
         train_loader = create_train_loader(
             train_dataset, BATCH_SIZE, NUM_WORKERS, batch_sampler=train_sampler
