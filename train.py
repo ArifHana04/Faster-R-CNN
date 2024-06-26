@@ -205,10 +205,10 @@ def parse_opt():
         type=str
     )
     parser.add_argument(
-        '--folds',
+        '--kfold',
         default=5,
         type=int,
-        help='number of KFold cross-validation folds'
+        help='number of folds for KFold cross-validation'
     )
 
     args = vars(parser.parse_args())
@@ -262,109 +262,138 @@ def main(args):
         mosaic=args['mosaic'],
         square_training=args['square_training']
     )
+    
+    kfold = KFold(n_splits=args['kfold'], shuffle=True, random_state=args['seed'])
 
-    kf = KFold(n_splits=args['folds'], shuffle=True, random_state=args['seed'])
-    fold_results = []
-
-    for fold, (train_idx, val_idx) in enumerate(kf.split(dataset)):
-        print(f'FOLD {fold}')
-        print('--------------------------------')
+    for fold, (train_idx, val_idx) in enumerate(kfold.split(dataset)):
+        print(f"Fold {fold + 1}")
 
         train_subset = Subset(dataset, train_idx)
         val_subset = Subset(dataset, val_idx)
 
+        if args['distributed']:
+            train_sampler = distributed.DistributedSampler(train_subset)
+            valid_sampler = distributed.DistributedSampler(val_subset, shuffle=False)
+        else:
+            train_sampler = RandomSampler(train_subset)
+            valid_sampler = SequentialSampler(val_subset)
+
         train_loader = create_train_loader(
-            train_subset, BATCH_SIZE, NUM_WORKERS
+            train_subset, BATCH_SIZE, NUM_WORKERS, batch_sampler=train_sampler
         )
-
         valid_loader = create_valid_loader(
-            val_subset, BATCH_SIZE, NUM_WORKERS
+            val_subset, BATCH_SIZE, NUM_WORKERS, batch_sampler=valid_sampler
         )
+        
+        print(f"Number of training samples: {len(train_subset)}")
+        print(f"Number of validation samples: {len(val_subset)}\n")
 
-        model = create_model[args['model']](num_classes=NUM_CLASSES)
+        if VISUALIZE_TRANSFORMED_IMAGES:
+            show_tranformed_image(train_loader, DEVICE, CLASSES, COLORS)
+
+        # Initialize the Averager class.
+        train_loss_hist = Averager()
+        train_loss_list = []
+        loss_cls_list = []
+        loss_box_reg_list = []
+        loss_objectness_list = []
+        loss_rpn_list = []
+        train_loss_list_epoch = []
+        val_map_05 = []
+        val_map = []
+        best_map = 0
+
+        if not args['disable_wandb']:
+            wandb.watch(create_model(args['model'], NUM_CLASSES))
+
+        # Initialize the model and move to the computation device.
+        model = create_model(args['model'], NUM_CLASSES)
         model.to(DEVICE)
 
-        params = [p for p in model.parameters() if p.requires_grad]
-        optimizer = torch.optim.SGD(params, lr=args['lr'], momentum=0.9, weight_decay=0.0005)
-        lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=3, gamma=0.1)
-
-        # Load pretrained weights.
         if args['weights'] is not None:
-            save_best_model = SaveBestModel(save_dir=OUT_DIR, best_valid_loss=float('inf'))
-            save_best_model.load_state(model, optimizer, args['weights'])
-        else:
-            save_best_model = SaveBestModel(save_dir=OUT_DIR, best_valid_loss=float('inf'))
+            weights_dict = torch.load(args['weights'], map_location=DEVICE)
+            model.load_state_dict(weights_dict['model_state_dict'])
 
-        train_loss_hist = Averager()
-        val_loss_hist = Averager()
+        # Get the model summary.
+        torchinfo.summary(model, (BATCH_SIZE, 3, IMAGE_SIZE, IMAGE_SIZE))
+
+        # Get the parameters.
+        params = [p for p in model.parameters() if p.requires_grad]
         
-        for epoch in range(NUM_EPOCHS):
-            if args['resume_training']:
-                start_epoch = save_best_model.resume(model, optimizer, args['lr'])
-            else:
-                start_epoch = 0
+        # Optimizer.
+        optimizer = torch.optim.AdamW(params, lr=args['lr'])
+        if args['resume_training'] and args['weights'] is not None:
+            optimizer.load_state_dict(weights_dict['optimizer_state_dict'])
+            init_epoch = weights_dict['epoch']
+        else:
+            init_epoch = 1
 
+        # Learning rate scheduler.
+        if args['cosine_annealing']:
+            lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+                optimizer, T_0=10, T_mult=1, verbose=True
+            )
+        else:
+            lr_scheduler = None
+
+        save_best_model = SaveBestModel()
+
+        # Training loop.
+        for epoch in range(init_epoch, NUM_EPOCHS + 1):
             # Train for one epoch.
-            train_loss = train_one_epoch(
+            train_loss_hist.reset()
+            _, batch_loss_list, batch_loss_cls_list, \
+                batch_loss_box_reg_list, batch_loss_objectness_list, \
+                batch_loss_rpn_list = train_one_epoch(
                 model, train_loader, optimizer,
                 DEVICE, epoch, train_loss_hist,
-                args['cosine_annealing'], SCALER
+                args['cosine_annealing'], lr_scheduler, SCALER, args['amp']
             )
 
-            # Evaluate on the test dataset.
-            val_loss, val_map = evaluate(
-                model, valid_loader, device=DEVICE, amp=args['amp']
+            loss_cls_list.extend(batch_loss_cls_list)
+            loss_box_reg_list.extend(batch_loss_box_reg_list)
+            loss_objectness_list.extend(batch_loss_objectness_list)
+            loss_rpn_list.extend(batch_loss_rpn_list)
+
+            train_loss_list_epoch.append(train_loss_hist.value)
+            train_loss_list.extend(batch_loss_list)
+            print(f"Epoch #{epoch} loss: {train_loss_hist.value}")
+
+            coco_evaluator, stats, val_pred_images = evaluate(
+                model, valid_loader, DEVICE, args['epochs'], epoch, args['amp']
             )
-            val_loss_hist.send(val_loss)
-            
-            # Save the current best model.
-            save_best_model(
-                val_loss, 
-                epoch, 
-                model, 
-                optimizer, 
-                val_map
-            )
+            _, mAP_0_5, mAP = stats
+            val_map_05.append(mAP_0_5)
+            val_map.append(mAP)
 
-            # Log the loss values to tensorboard.
-            tensorboard_loss_log(writer, epoch, train_loss_hist.value, val_loss_hist.value)
-            tensorboard_map_log(writer, epoch, val_map)
-            
-            # Log loss and mAP to console.
-            print(f"Train Loss: {train_loss_hist.value}, Val Loss: {val_loss_hist.value}, Val mAP: {val_map}")
-
-            # Log the loss values to csv file.
-            csv_log(OUT_DIR, epoch, train_loss_hist.value, val_loss_hist.value, val_map)
-
-            # Log the loss values to Weights & Biases.
             if not args['disable_wandb']:
-                wandb_log(epoch, train_loss_hist.value, val_loss_hist.value, val_map)
-            
-            train_loss_hist.reset()
-            val_loss_hist.reset()
+                wandb_log({
+                    'train_loss': train_loss_hist.value,
+                    'val_mAP_0.5': mAP_0_5,
+                    'val_mAP': mAP
+                })
 
             if args['cosine_annealing']:
-                lr_scheduler.step()
+                print('Cosine annealing warm restarts lr: {:.6f}'.format(optimizer.param_groups[0]["lr"]))
+
+            # Save the current epoch model state
+            save_model_state(
+                model, optimizer, args['model'], args['epochs'], epoch, OUT_DIR
+            )
+
+            # Save model if a better mAP is obtained.
+            save_best_model(
+                mAP, epoch, model, optimizer, args['model'],
+                args['epochs'], OUT_DIR
+            )
         
-        fold_results.append({
-            'fold': fold,
-            'train_loss': train_loss_hist.value,
-            'val_loss': val_loss_hist.value,
-            'val_map': val_map
-        })
+        print(f"Finished fold {fold + 1}")
 
-    # Save the cross-validation results.
-    cv_results_path = os.path.join(OUT_DIR, 'cv_results.yaml')
-    yaml_save(file_path=cv_results_path, data=fold_results)
-    
-    # Log the cross-validation results.
-    print(f'Cross-validation results: {fold_results}')
-
-    writer.close()
-    
     if not args['disable_wandb']:
-        wandb_save_model(cv_results_path)
+        wandb.finish()
+    writer.close()
 
 if __name__ == '__main__':
     args = parse_opt()
     main(args)
+
