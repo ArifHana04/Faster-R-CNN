@@ -50,6 +50,7 @@ import numpy as np
 import torchinfo
 import os
 from sklearn.model_selection import KFold
+from sklearn.model_selection import StratifiedKFold
 
 torch.multiprocessing.set_sharing_strategy('file_system')
 
@@ -263,9 +264,9 @@ def main(args):
         square_training=args['square_training']
     )
     
-    kfold = KFold(n_splits=args['kfold'], shuffle=True, random_state=args['seed'])
+    kfold = StratifiedKFold(n_splits=args['kfold'], shuffle=True, random_state=args['seed'])
 
-    for fold, (train_idx, val_idx) in enumerate(kfold.split(dataset)):
+    for fold, (train_idx, val_idx) in enumerate(kfold.split(dataset, dataset.targets)):
         print(f"Fold {fold + 1}")
     
         train_subset = Subset(dataset, train_idx)
