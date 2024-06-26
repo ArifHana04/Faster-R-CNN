@@ -308,7 +308,6 @@ def main(args):
 
         # Initialize the model and move to the computation device.
         model = create_model(args['model'], NUM_CLASSES)
-        model.to(DEVICE)
 
         if args['weights'] is not None:
             weights_dict = torch.load(args['weights'], map_location=DEVICE)
