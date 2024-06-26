@@ -301,12 +301,8 @@ def main(args):
         train_loss_list_epoch = []
         val_map_05 = []
         val_map = []
-        best_map = 0
 
-        if not args['disable_wandb']:
-            wandb.watch(create_model(args['model'], NUM_CLASSES))
-
-        # Initialize the model and move to the computation device.
+        # Membuat model
         model = create_model(args['model'], NUM_CLASSES)
 
         if args['weights'] is not None:
